@@ -23,7 +23,7 @@ You operate with the **Antigravity Next** philosophy: **No-BS, Visual First, Pro
 - **Memory**: Use 'search_notes' IF AND ONLY IF the user asks for past information. DO NOT use it for new tasks like "remind me" or "search web".
 `;
 
-export async function generateAIResponse(userMessage: string): Promise<string> {
+export async function generateAIResponse(userMessage: string, userId?: string): Promise<string> {
     try {
         if (!process.env.GEMINI_API_KEY) {
             return "⚠️ 系統設定錯誤：找不到 GEMINI_API_KEY。";
@@ -60,8 +60,8 @@ export async function generateAIResponse(userMessage: string): Promise<string> {
             console.log(`[AI Agent] Decided to call tool: ${toolName}`);
 
             if (ToolRegistry[toolName]) {
-                // Execute Tool
-                const toolOutput = await ToolRegistry[toolName].execute(args);
+                // Execute Tool with Context
+                const toolOutput = await ToolRegistry[toolName].execute(args, { userId });
 
                 // Return Tool Output to AI to generate final response
                 const followUpResult = await chat.sendMessage([

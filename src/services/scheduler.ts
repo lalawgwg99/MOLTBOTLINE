@@ -19,8 +19,8 @@ export const Scheduler = {
         console.log('[Scheduler] Heartbeat started. Tick-tock...');
 
         // Task 1: Check Prices every hour (0 * * * *)
-        // For Demo: Check every minute (* * * * *)
-        cron.schedule('* * * * *', async () => {
+        // Task 1: Check Prices every hour (0 * * * *)
+        cron.schedule('0 * * * *', async () => {
             console.log('[Scheduler] 🕗 Running Hourly Price Check...');
             const drops = await PriceWatcher.checkPrices();
 

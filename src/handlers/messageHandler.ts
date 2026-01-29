@@ -32,7 +32,7 @@ export async function messageHandler(event: WebhookEvent) {
     console.log(`Received message: ${userMessage} (Group: ${isGroup})`);
 
     // Generate AI Response
-    const aiResponse = await generateAIResponse(userMessage);
+    const aiResponse = await generateAIResponse(userMessage, event.source.userId);
 
     // Send Reply
     // Strategy: If response is short, send text. If long/structured, could use Flex.

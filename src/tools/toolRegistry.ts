@@ -4,7 +4,53 @@ export interface Tool {
     name: string;
     description: string;
     parameters: any;
-    execute: (args: any) => Promise<string>;
+    execute: (args: any, context?: any) => Promise<string>;
+}
+
+// ... (previous tools unchanged until set_reminder)
+
+'set_reminder': {
+    name: 'set_reminder',
+        description: 'Set a timer to remind the user of something after a specific delay. Use for "remind me in X minutes".',
+            parameters: {
+        type: 'OBJECT',
+            properties: {
+            minutes: { type: 'NUMBER', description: 'Delay time in minutes (e.g., 0.5 for 30 seconds)' },
+            message: { type: 'STRING', description: 'The content of the reminder' }
+        },
+        required: ['minutes', 'message']
+    },
+    execute: async (args: any, context?: any) => {
+        const ms = args.minutes * 60 * 1000;
+        const reminderMsg = args.message;
+        const userId = context?.userId;
+
+        if (!userId) {
+            return `⏰ 提醒已設定 (${args.minutes}分後)，但我無法取得您的 UserID，時間到時無法主動通知。\n(僅會在伺服器留紀錄)`;
+        }
+
+        setTimeout(async () => {
+            console.log(`[REMINDER FIRED] ${reminderMsg} for ${userId}`);
+
+            try {
+                // Import Client dynamically to avoid circular deps or init issues
+                const { Client } = await import('@line/bot-sdk');
+                const client = new Client({
+                    channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN || '',
+                    channelSecret: process.env.CHANNEL_SECRET || '',
+                });
+
+                await client.pushMessage(userId, {
+                    type: 'text',
+                    text: `⏰ 叮叮！時間到囉！\n\n提醒事項：${reminderMsg}`
+                });
+            } catch (e) {
+                console.error("Failed to push reminder:", e);
+            }
+        }, ms);
+
+        return `⏰ 提醒已設定！\n我將在 ${args.minutes} 分鐘後通知您：\n"${reminderMsg}"`;
+    }
 }
 
 export const ToolRegistry: Record<string, Tool> = {
