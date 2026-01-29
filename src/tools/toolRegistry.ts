@@ -91,5 +91,65 @@ export const ToolRegistry: Record<string, Tool> = {
                 return `❌ 讀取失敗 (檔案可能不存在)`;
             }
         }
+    },
+    'run_shell': {
+        name: 'run_shell',
+        description: 'Execute a shell command. CAUTION: This gives full control. Use for installing packages, running tests, or file operations.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                command: { type: 'STRING', description: 'The shell command to run (e.g., npm install lodash)' }
+            },
+            required: ['command']
+        },
+        execute: async (args: any) => {
+            const { exec } = await import('child_process');
+            const util = await import('util');
+            const execAsync = util.promisify(exec);
+
+            try {
+                console.log(`[Shell] Executing: ${args.command}`);
+                const { stdout, stderr } = await execAsync(args.command, { cwd: process.cwd() });
+                return `💻 指令執行成功:\n${stdout}\n(Stderr: ${stderr})`;
+            } catch (err: any) {
+                return `❌ 指令失敗:\n${err.message}`;
+            }
+        }
+    },
+    'git_push_remote': {
+        name: 'git_push_remote',
+        description: 'Push the current project code to a remote GitHub repository. Commits all changes first.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                remoteUrl: { type: 'STRING', description: 'The GitHub repository URL (e.g., https://github.com/user/repo.git)' },
+                message: { type: 'STRING', description: 'Commit message' }
+            },
+            required: ['remoteUrl', 'message']
+        },
+        execute: async (args: any) => {
+            const { exec } = await import('child_process');
+            const util = await import('util');
+            const execAsync = util.promisify(exec);
+
+            try {
+                // 1. Add remote if not exists (or set-url)
+                try {
+                    await execAsync(`git remote add origin ${args.remoteUrl}`);
+                } catch (e) {
+                    await execAsync(`git remote set-url origin ${args.remoteUrl}`);
+                }
+
+                // 2. Add, Commit, Push
+                await execAsync('git add .');
+                await execAsync(`git commit -m "${args.message}"`);
+                await execAsync('git branch -M main');
+                await execAsync('git push -u origin main');
+
+                return `🚀 成功推送到 GitHub!\nRepo: ${args.remoteUrl}`;
+            } catch (err: any) {
+                return `❌ 推送失敗 (請確認您的電腦已有 GitHub 權限/SSH Key):\n${err.message}`;
+            }
+        }
     }
 };
