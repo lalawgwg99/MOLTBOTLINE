@@ -136,9 +136,16 @@ export const ToolRegistry: Record<string, Tool> = {
             try {
                 console.log(`[Shell] Executing: ${args.command}`);
                 const { stdout, stderr } = await execAsync(args.command, { cwd: process.cwd() });
-                return `💻 指令執行成功:\n${stdout}\n(Stderr: ${stderr})`;
+
+                // Truncate output to prevent LINE API 400 error (max ~5000 chars)
+                const maxLen = 2000;
+                const truncatedOut = stdout.length > maxLen
+                    ? stdout.substring(0, maxLen) + `\n\n... (輸出過長，已截斷 ${stdout.length - maxLen} 字)`
+                    : stdout;
+
+                return `💻 指令執行成功：\n${truncatedOut}`;
             } catch (err: any) {
-                return `❌ 指令失敗:\n${err.message}`;
+                return `❌ 指令失敗：\n${err.message.substring(0, 500)}`;
             }
         }
     },
