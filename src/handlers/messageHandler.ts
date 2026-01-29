@@ -40,7 +40,7 @@ export async function messageHandler(event: WebhookEvent) {
 
     const echo: TextMessage = {
         type: 'text',
-        text: aiResponse
+        text: aiResponse || "⚠️ (無回應)" // Fallback to prevent 400 error
     };
 
     // Optionally use Flex

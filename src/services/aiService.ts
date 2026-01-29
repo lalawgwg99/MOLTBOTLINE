@@ -63,10 +63,6 @@ export async function generateAIResponse(userMessage: string): Promise<string> {
                 const toolOutput = await ToolRegistry[toolName].execute(args);
 
                 // Return Tool Output to AI to generate final response
-                // For simplicity in this V1, we just return the tool output directly or summarize it.
-                // Ideally, we send this back to Gemini to wrap it in a natural language response.
-
-                // Let's do a simple follow-up:
                 const followUpResult = await chat.sendMessage([
                     {
                         functionResponse: {
@@ -75,7 +71,8 @@ export async function generateAIResponse(userMessage: string): Promise<string> {
                         }
                     }
                 ]);
-                return followUpResult.response.text();
+                const finalText = followUpResult.response.text();
+                return finalText || `[系統回報] 工具執行完畢。\n結果：${toolOutput}`; // Fallback if AI stays silent
             }
         }
 
