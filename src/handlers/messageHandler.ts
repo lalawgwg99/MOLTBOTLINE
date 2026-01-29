@@ -20,8 +20,8 @@ export async function messageHandler(event: WebhookEvent) {
     const isGroup = event.source.type === 'group' || event.source.type === 'room';
 
     // Group Chat Logic: Only reply if mentioned or triggered
-    // Trigger keywords: @BotName, mol, 呼叫
-    const triggerPrefixes = ['mol', 'Moltbot', '呼叫', 'bot', '@'];
+    // Trigger keywords: @BotName, mol, 呼叫, GM, @GM
+    const triggerPrefixes = ['mol', 'Moltbot', '呼叫', 'bot', '@', 'GM'];
     const isTriggered = triggerPrefixes.some(p => userMessage.toLowerCase().startsWith(p.toLowerCase()));
 
     if (isGroup && !isTriggered) {
