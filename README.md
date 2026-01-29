@@ -1,41 +1,64 @@
 # MOLTBOT v1.0 (Agentic LINE Bot)
 
-This project is a high-performance LINE Bot powered by **Google Gemini Pro**, designed with an "Agentic" architecture inspired by Moltbot and KDDI's AI Manager.
+此專案是一款由 **Google Gemini Pro** 驅動的高效能 LINE 機器人，採用愛 Moltbot 及 KDDI AI Manager 啟發的「代理」架構設計。
 
-## 🚀 Features
+## 🚀 特色
 
-- **Agentic Core**: Not just a chatbot. It's designed to act as a manager/assistant.
-- **Traditional Chinese (Taiwan)**: Native system prompt optimization.
-- **Production Ready**: Built with Hono + Node.js + TypeScript.
+- **Agentic Core**: 不只是聊天機器人，它被設計成可以管理或助理的角色。
+- **繁體中文 (台灣)**: 原生系統提示優化。
+- **製作精良**: 使用 Hono + Node.js + TypeScript 製作。
+- **God Mode**: 支援 Auto-Dev，可自我編寫程式碼並 Push 到 GitHub。
 
-## 🛠️ Setup
+## 🛠️ 設定
 
-1. **Configure Environment Variables**:
-    - Copy `.env.example` to `.env`.
-    - Fill in `CHANNEL_ACCESS_TOKEN` and `CHANNEL_SECRET` from [LINE Developers Console](https://developers.line.biz/).
-    - Fill in `GEMINI_API_KEY` from [Google AI Studio](https://makersuite.google.com/app/apikey).
+### 1. 設定環境變數
 
-2. **Install Dependencies** (if not done):
+- 複製 `.env.example` 到 `.env`
+- 填寫從 [LINE 開發者控制台](https://developers.line.biz/) 取得的 `CHANNEL_ACCESS_TOKEN` `CHANNEL_SECRET`
+- 用 [Google AI Studio](https://makersuite.google.com/app/apikey) 補上 `GEMINI_API_KEY`
 
-    ```bash
-    npm install
-    ```
+### 2. 安裝依賴套件 (如果沒安裝)
 
-## ▶️ Running
+```bash
+npm install
+```
 
-- **Development Mode**:
+## ▶️ 跑步
 
-    ```bash
-    npm run dev
-    ```
+### • 開發模式
 
-    (Note: You need to set `dev` script in `package.json` to `tsx watch src/index.ts` if not present, otherwise use `npx tsx watch src/index.ts`)
+```bash
+npm run dev
+```
 
-- **Expose to LINE**:
-  - Use `ngrok`: `ngrok http 3000`
-  - Copy the HTTPS URL (e.g., `https://xxxx.ngrok-free.app`)
-  - Set Webhook URL in LINE Console: `https://xxxx.ngrok-free.app/callback`
+(注意：如果不存在，請將腳本設為使用 dev package.jsontsx watch src/index.tsnpx tsx watch src/index.ts)
 
-## 🧠 Customization
+### • 向LINE展示
 
-- Edit `src/services/aiService.ts` to tweak the **System Prompt** or adjust the "Persona".
+- 用途：`ngrok` `ngrok http 3000`
+- 複製 HTTPS 網址 (例如：`https://xxxx.ngrok-free.app`)
+- 在 LINE 主控台設定 Webhook URL : `https://xxxx.ngrok-free.app/callback`
+
+---
+
+## ☁️ 雲端啟動 (GitHub Codespaces)
+
+無需電腦，手機即可開發：
+
+1. 點擊 **"Code"** -> **"Codespaces"** -> **"Create codespace on main"**。
+2. 等待終端機開啟後，輸入：
+
+   ```bash
+   npm install
+   npm start
+   ```
+
+3. **⚠️ 關鍵步驟 (沒做不會通)**：
+   - 點擊下方面板的 **"PORTS"** (連接埠)。
+   - 對著 `3000`按右鍵 -> **"Port Visibility"** -> 改為 **"Public"** (公開)。
+   - 複製 **"Local Address"** 網址，填入 LINE Webhook URL。
+   - (記得網址後面要加 `/callback`)。
+
+## 🧠 客製化
+
+- 編輯以調整系統提示或調整「Persona」 `src/services/aiService.ts`
