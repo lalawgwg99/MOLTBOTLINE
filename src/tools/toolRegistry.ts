@@ -222,43 +222,42 @@ export const ToolRegistry: Record<string, Tool> = {
                 return `❌ 搜尋失敗: ${err.message}`;
             }
         }
-    }
-},
-'set_reminder': {
-    name: 'set_reminder',
-        description: 'Set a timer to remind the user of something after a specific delay. Use for "remind me in X minutes".',
-            parameters: {
-        type: 'OBJECT',
-            properties: {
-            minutes: { type: 'NUMBER', description: 'Delay time in minutes (e.g., 0.5 for 30 seconds)' },
-            message: { type: 'STRING', description: 'The content of the reminder' }
-        },
-        required: ['minutes', 'message']
     },
-    execute: async (args: any) => {
-        const ms = args.minutes * 60 * 1000;
-        const reminderMsg = args.message;
+    'set_reminder': {
+        name: 'set_reminder',
+        description: 'Set a timer to remind the user of something after a specific delay. Use for "remind me in X minutes".',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                minutes: { type: 'NUMBER', description: 'Delay time in minutes (e.g., 0.5 for 30 seconds)' },
+                message: { type: 'STRING', description: 'The content of the reminder' }
+            },
+            required: ['minutes', 'message']
+        },
+        execute: async (args: any) => {
+            const ms = args.minutes * 60 * 1000;
+            const reminderMsg = args.message;
 
-        // For this V1 prototyping, using simple setTimeout.
-        // In Production, this should use a persistent scheduler (Redis/DB).
+            // For this V1 prototyping, using simple setTimeout.
+            // In Production, this should use a persistent scheduler (Redis/DB).
 
-        setTimeout(() => {
-            // Here we would ideally PUSH a message to LINE.
-            // However, our current architecture (Webhook) is passive reply based.
-            // We'll mimic this by logging for now, or relying on the 'pushMessage' if available in context.
-            // Since this tool is isolated, we can't easily access the LINE client directly without refactoring.
-            // But for the user's "30 seconds" test, we can try to just return a "Set" confirmation,
-            // and explain the limitations or try to hack a delayed push if we import the client.
+            setTimeout(() => {
+                // Here we would ideally PUSH a message to LINE.
+                // However, our current architecture (Webhook) is passive reply based.
+                // We'll mimic this by logging for now, or relying on the 'pushMessage' if available in context.
+                // Since this tool is isolated, we can't easily access the LINE client directly without refactoring.
+                // But for the user's "30 seconds" test, we can try to just return a "Set" confirmation,
+                // and explain the limitations or try to hack a delayed push if we import the client.
 
-            console.log(`[REMINDER FIRED] ${reminderMsg}`);
+                console.log(`[REMINDER FIRED] ${reminderMsg}`);
 
-            // Try to import Client dynamically to push?
-            // This requires CHANNEL_ACCESS_TOKEN and UserId.
-            // Since we don't haveUserId in args, we can't push back right now.
+                // Try to import Client dynamically to push?
+                // This requires CHANNEL_ACCESS_TOKEN and UserId.
+                // Since we don't haveUserId in args, we can't push back right now.
 
-        }, ms);
+            }, ms);
 
-        return `⏰ 提醒已設定！\n我將在 ${args.minutes} 分鐘後提醒您：\n"${reminderMsg}"\n\n(注意：此 V1 版本僅在伺服器運作時有效，若伺服器休眠可能會延遲)`;
+            return `⏰ 提醒已設定！\n我將在 ${args.minutes} 分鐘後提醒您：\n"${reminderMsg}"\n\n(注意：此 V1 版本僅在伺服器運作時有效，若伺服器休眠可能會延遲)`;
+        }
     }
-}
 };
