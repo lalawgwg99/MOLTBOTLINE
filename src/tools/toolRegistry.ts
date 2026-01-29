@@ -152,5 +152,49 @@ export const ToolRegistry: Record<string, Tool> = {
                 return `❌ 推送失敗 (請確認您的電腦已有 GitHub 權限/SSH Key):\n${err.message}`;
             }
         }
+    },
+    'search_notes': {
+        name: 'search_notes',
+        description: 'Search through all saved files/notes for specific keywords. Use this to RECALL information or answer questions based on past memories.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                keyword: { type: 'STRING', description: 'Keyword to search for (e.g., "會員", "開會", "APIs")' }
+            },
+            required: ['keyword']
+        },
+        execute: async (args: any) => {
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const dataDir = path.join(process.cwd(), 'data');
+
+            try {
+                // 1. Check if directory exists
+                try {
+                    await fs.access(dataDir);
+                } catch {
+                    return "📭 記憶庫是空的 (沒有任何筆記)";
+                }
+
+                // 2. Read all files
+                const files = await fs.readdir(dataDir);
+                const results: string[] = [];
+
+                for (const file of files) {
+                    const content = await fs.readFile(path.join(dataDir, file), 'utf-8');
+                    if (content.toLowerCase().includes(args.keyword.toLowerCase())) {
+                        results.push(`📄 [${file}]:\n${content.substring(0, 200)}... (略)`); // Preview
+                    }
+                }
+
+                if (results.length === 0) {
+                    return `❌ 找不到關於 "${args.keyword}" 的記憶。\n(Memory is clean)`;
+                }
+
+                return `🔍 找到 ${results.length} 筆相關記憶：\n\n${results.join('\n\n')}\n\n(若要查看完整內容，請用 read_note)`;
+            } catch (err: any) {
+                return `❌ 搜尋失敗: ${err.message}`;
+            }
+        }
     }
 };
