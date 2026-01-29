@@ -28,7 +28,7 @@ export async function generateAIResponse(userMessage: string): Promise<string> {
         }
 
         const model = genAI.getGenerativeModel({
-            model: "gemini-pro",
+            model: "gemini-1.5-flash",
             tools: [{
                 functionDeclarations: Object.values(ToolRegistry).map(t => ({
                     name: t.name,
