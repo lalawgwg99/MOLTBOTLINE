@@ -16,8 +16,20 @@ export async function messageHandler(event: WebhookEvent) {
         return Promise.resolve(null);
     }
 
-    const userMessage = event.message.text;
-    console.log(`Received message: ${userMessage}`);
+    const userMessage = event.message.text.trim();
+    const isGroup = event.source.type === 'group' || event.source.type === 'room';
+
+    // Group Chat Logic: Only reply if mentioned or triggered
+    // Trigger keywords: @BotName, mol, 呼叫
+    const triggerPrefixes = ['mol', 'Moltbot', '呼叫', 'bot', '@'];
+    const isTriggered = triggerPrefixes.some(p => userMessage.toLowerCase().startsWith(p.toLowerCase()));
+
+    if (isGroup && !isTriggered) {
+        // Ignore non-trigger messages in groups
+        return Promise.resolve(null);
+    }
+
+    console.log(`Received message: ${userMessage} (Group: ${isGroup})`);
 
     // Generate AI Response
     const aiResponse = await generateAIResponse(userMessage);
