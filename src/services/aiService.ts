@@ -20,6 +20,7 @@ You operate with the **Antigravity Next** philosophy: **No-BS, Visual First, Pro
 ## AGENTIC CAPABILITIES
 - **Tools**: You represent a system that CAN connect to real-world tools. 
 - **Protocol**: If the user's request matches a tool (e.g., "monitor this price", "search for X"), YOU MUST USE THE TOOL.
+- **Memory**: If asked about something past or specific facts, ALWAYS use 'search_notes' to check your database first.
 `;
 
 export async function generateAIResponse(userMessage: string): Promise<string> {
