@@ -1,6 +1,6 @@
-import { Client, WebhookEvent, TextMessage } from '@line/bot-sdk';
+import { Client, WebhookEvent } from '@line/bot-sdk';
 import { generateAIResponse } from '../services/aiService';
-// import { createTextFlexMessage } from '../utils/flexMessages';
+import { createSmartReply, createErrorFlex } from '../utils/flexMessages';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -20,36 +20,28 @@ export async function messageHandler(event: WebhookEvent) {
     const isGroup = event.source.type === 'group' || event.source.type === 'room';
 
     // Group Chat Logic: Only reply if mentioned or triggered
-    // Trigger keywords: @BotName, mol, 呼叫, GM, @GM
     const triggerPrefixes = ['mol', 'Moltbot', '呼叫', 'bot', '@', 'GM'];
     const isTriggered = triggerPrefixes.some(p => userMessage.toLowerCase().startsWith(p.toLowerCase()));
 
     if (isGroup && !isTriggered) {
-        // Ignore non-trigger messages in groups
         return Promise.resolve(null);
     }
 
     console.log(`Received message: ${userMessage} (Group: ${isGroup})`);
 
-    // Generate AI Response
-    const aiResponse = await generateAIResponse(userMessage, event.source.userId);
-
-    // Send Reply
-    // Strategy: If response is short, send text. If long/structured, could use Flex.
-    // For now, let's stick to standard text for reliability, or use Flex if enabled.
-
-    const echo: TextMessage = {
-        type: 'text',
-        text: aiResponse || "⚠️ (無回應)" // Fallback to prevent 400 error
-    };
-
-    // Optionally use Flex
-    // const flexEcho = createTextFlexMessage(aiResponse);
-
-    // Note: For real-world use, catch errors (invalid token etc)
     try {
-        return client.replyMessage(event.replyToken, echo);
+        // Generate AI Response
+        const aiResponse = await generateAIResponse(userMessage, event.source.userId);
+
+        // 使用智慧中介層：自動判斷用 Text 或 Flex Message
+        const reply = createSmartReply(aiResponse || '⚠️ (無回應)');
+
+        return client.replyMessage(event.replyToken, reply);
     } catch (err) {
-        console.error("Error sending reply:", err);
+        console.error("Error in messageHandler:", err);
+        // 發生錯誤時用美化的錯誤訊息
+        const errorReply = createErrorFlex('處理請求時發生問題，請稍後再試。');
+        return client.replyMessage(event.replyToken, errorReply);
     }
 }
+
