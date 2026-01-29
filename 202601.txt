@@ -1,0 +1,1976 @@
+/* ========== 基本設定 ========== */
+/* ========== 🆕 Google Places API 設定 ========== */
+var GOOGLE_PLACES_API_KEY = "AIzaSyDOavVgYnquYBIIVuxxM19Xcuv5IbkWk7o";
+var SEARCH_RADIUS = 1000; // 搜尋半徑 1000 公尺
+
+var CHANNEL_ACCESS_TOKEN = "xXs0zsDZg3IJvJAsfWRo6907MGJinuF2DnTLrRkGegwfEhsilwWiwCEXlxvbKQ0va4oKE+vH1G++w0VqMcFXk1SfJQJZLTzxIJWLOMBku9BE6ZB6wFNl2qhO71yzpKfHKI4nx45wXEa25XlDEviGcwdB04t89/1O/w1cDnyilFU=";
+var spreadSheetId = "1bIGh4kVpYvP1PlI_HvLYWOTZAgaKOBJKzobfbl0Bab4";
+
+/* ========== 搜尋工作表設定 ========== */
+var sheetName = ["📋全省聯絡","🤖家電MD","2020外送","2021外送"];
+var searchColumn = [1,1,3,3];
+
+/* ========== 值班表設定 ========== */
+var SCHEDULE_SHEET_NAME = "📅家電班表";
+var SCHEDULE_KEYWORDS = ["班表"];
+var TOMORROW_KEYWORDS = ["明日班表"];
+
+/* ========== 跨店查詢設定 ========== */
+var STORE_QUERY_KEYWORDS = ["查詢", "跨店"];
+
+/* ========== 🆕 功能選單設定 ========== */
+var MENU_KEYWORDS = ["選單"];
+
+/* ========== 🆕 油價查詢設定 ========== */
+var OIL_KEYWORDS = ["加油"];
+
+/* ========== 🆕 AI 對話設定 ========== */
+var AI_PREFIX = "AI "; // AI 對話必須以 "AI " 開頭
+
+/* ========== 🆕 美食推薦設定 ========== */
+var FOOD_KEYWORDS = ["吃什麼", "美食", "餓餓"];
+// 餐廳類型對應表
+var RESTAURANT_TYPES = {
+  "中式料理": "chinese_restaurant",
+  "日式料理": "japanese_restaurant",
+  "韓式料理": "korean_restaurant",
+  "義式料理": "italian_restaurant",
+  "美式料理": "american_restaurant",
+  "泰式料理": "thai_restaurant",
+  "咖啡廳": "cafe",
+  "速食": "fast_food",
+  "火鍋": "hot_pot",
+  "燒烤": "barbecue_restaurant"
+};
+
+/* ========== 🆕 單號查詢設定 ========== */
+var ORDER_MIN_LENGTH = 8;  // 單號最小長度（避免誤觸發短關鍵字）
+
+/* ========== 按鈕連結設定 ========== */
+var OTHER_BUTTON_URL = "https://drive.google.com/file/d/1XIw8ubEFGhbZsRbnrgLs9MIsPTVLpZF5/view?usp=sharing";
+
+/* ========== 白名單設定 ========== */
+var whiteList = [];
+var whiteListMode = 0;
+
+/* ========== 搜尋模式 ========== */
+var fuzzySearch = 1;
+
+/* ========== UI 配色 ========== */
+var THEME_COLOR = "#1DB446";
+var HEADER_COLOR = "#0F9D58";
+var TEXT_COLOR = "#333333";
+var SCHEDULE_COLOR = "#FF6F00";
+var STORE_COLOR = "#FF5722";
+var OIL_COLOR = "#FF9800";
+var AI_COLOR = "#2196F3";
+var FOOD_COLOR = "#FF6B6B";
+
+/* ========== 顯示限制 ========== */
+var MAX_REPLY_MESSAGES = 5;
+var MAX_BUBBLES = 10;
+var MAX_FIELDS_PER_BUBBLE = 10;
+var MAX_TEXT_LEN = 500;
+
+var spreadSheet = SpreadsheetApp.openById(spreadSheetId);
+
+/**
+ * 主要處理 POST 請求
+ */
+function doPost(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    return ContentService.createTextOutput("Invalid request");
+  }
+
+  var userData;
+  try {
+    userData = JSON.parse(e.postData.contents);
+  } catch (err) {
+    Logger.log("JSON parse error: " + err);
+    return ContentService.createTextOutput("Bad JSON");
+  }
+
+  if (!userData.events || userData.events.length === 0) {
+    return ContentService.createTextOutput("No events");
+  }
+
+  var event = userData.events[0];
+
+  // 白名單檢查
+  try {
+    var clientID = event.source && event.source.userId ? event.source.userId : null;
+    if (whiteListMode === 1) {
+      if (!clientID || whiteList.indexOf(clientID) === -1) {
+        return ContentService.createTextOutput("Not in whitelist");
+      }
+    }
+  } catch (err) {
+    Logger.log("Whitelist check error: " + err);
+  }
+
+  var replyToken = event.replyToken;
+  var userId = event.source.userId;
+  var replyMessage = [];
+
+  // 處理位置訊息（美食推薦）
+  if (event.type === "message" && event.message && event.message.type === "location") {
+    handleLocationForFood(event);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ==========================================
+  // 🆕 圖片處理 (群組靜默快取)
+  // ==========================================
+  if (event.type === "message" && event.message.type === "image") {
+    var userId = event.source.userId;
+    var messageId = event.message.id;
+    
+    // 💾 將圖片 ID 存入快取，有效時間 60 秒 (以用戶ID為Key)
+    CacheService.getScriptCache().put(userId + "_last_image", messageId, 60);
+    
+    // 靜默：直接返回 OK，不回傳訊息，避免在群組洗版
+    return ContentService.createTextOutput("OK");
+  }
+
+  // 不是文字訊息則結束 (只剩文字訊息需要處理)
+  if (event.type !== "message" || !event.message || event.message.type !== "text") {
+    return ContentService.createTextOutput("Not a text message");
+  }
+
+  var searchContent = (event.message.text || "").trim();
+
+  // ==================================================
+  // 1. 優先處理圖片分析指令 (群組圖片快取觸發 - 超級靜默模式)
+  // ==================================================
+  var triggerKeywords = ["AI 分析圖片", "AI 看圖", "看圖"];
+  if (triggerKeywords.indexOf(searchContent) !== -1) {
+    var userId = event.source.userId;
+    var cachedMessageId = CacheService.getScriptCache().get(userId + "_last_image");
+    
+    if (cachedMessageId) {
+      // ✅ 找到了快取圖片
+      
+      // ⚠️ **這裡故意留白**：移除推播「分析中...」的指令，達成絕對靜默。
+      
+      var imageBlob = getLineImageBlob(cachedMessageId); 
+      var imageBase64 = Utilities.base64Encode(imageBlob.getBytes());
+      
+      var visionResult = callVisionAI(imageBase64);
+      
+      replyMessage.push({ type: "text", text: visionResult });
+      CacheService.getScriptCache().remove(userId + "_last_image"); 
+      
+    } else {
+      // ❌ 找不到圖片 (超時或沒傳圖，此時必須回覆提示)
+      replyMessage.push({ 
+        type: "text", 
+        text: "⚠️ 找不到圖片或已超時 (60秒)。\n\n請「先傳送圖片」，然後馬上輸入「AI 看圖」。" 
+      });
+    }
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    return ContentService.createTextOutput("OK");
+  }
+  
+  // 🆕 股票查詢入口：只接受「股票＋4~5位代碼」
+  var stockMatch = searchContent.match(/^股票\s*([0-9]{4,5})$/);
+  if (stockMatch) {
+    var stockCode = stockMatch[1];
+    // 呼叫股票分析模組
+    if (typeof analyzeAndReply === "function") {
+        analyzeAndReply(stockCode, replyToken, userId, "balanced", 1000000);
+    } else {
+        replyMessage.push({ type: "text", text: "⚠️ 股票模組尚未載入" });
+        sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    }
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 🆕 檢查是否為美食推薦（精確匹配） ==========
+  var isFoodQuery = false;
+  for (var i = 0; i < FOOD_KEYWORDS.length; i++) {
+    if (searchContent.toLowerCase() === FOOD_KEYWORDS[i].toLowerCase()) {
+      isFoodQuery = true;
+      break;
+    }
+  }
+
+  if (isFoodQuery) {
+    handleFoodRecommendation(event);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 🆕 檢查是否為餐廳類型選擇 ==========
+  if (RESTAURANT_TYPES[searchContent]) {
+    handleRestaurantType(event, searchContent);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 🆕 檢查是否為功能選單（精確匹配） ==========
+  var isMenuQuery = false;
+  for (var i = 0; i < MENU_KEYWORDS.length; i++) {
+    if (searchContent.toLowerCase() === MENU_KEYWORDS[i].toLowerCase()) {
+      isMenuQuery = true;
+      break;
+    }
+  }
+  
+  if (isMenuQuery) {
+    replyMessage.push(createFunctionMenu());
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 🆕 優先檢查油價查詢（精確匹配） ==========
+  var isOilQuery = false;
+  for (var i = 0; i < OIL_KEYWORDS.length; i++) {
+    if (searchContent === OIL_KEYWORDS[i]) {
+      isOilQuery = true;
+      break;
+    }
+  }
+  
+  if (isOilQuery) {
+    var oilPriceData = getOilPriceInfo();
+    if (oilPriceData.success) {
+      replyMessage.push(createOilPriceFlexMessage(oilPriceData));
+    } else {
+      replyMessage.push({
+        type: "text",
+        text: "❌ 無法獲取油價資訊\n" + oilPriceData.message
+      });
+    }
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ==================================================
+  // 3. 處理 AI 文字指令 (雙模型 PK 版)
+  // ==================================================
+  if (searchContent.indexOf(AI_PREFIX) === 0) {
+    var prompt = searchContent.substring(AI_PREFIX.length).trim();
+    if (prompt.length > 0) {
+      // 1. 呼叫雙模型並行處理
+      var aiResults = callDualAIModels(prompt);
+      // 2. 製作左右滑動的 Flex Message
+      var flexMsg = createDualAIComparisonFlex(aiResults, prompt);
+      // 3. 發送
+      replyMessage.push(flexMsg);
+      sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+      return ContentService.createTextOutput("OK");
+    }
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 檢查是否為跨店查詢說明（精確匹配） ==========
+  var isStoreQueryGuide = false;
+  for (var i = 0; i < STORE_QUERY_KEYWORDS.length; i++) {
+    if (searchContent.toLowerCase() === STORE_QUERY_KEYWORDS[i].toLowerCase()) {
+      isStoreQueryGuide = true;
+      break;
+    }
+  }
+
+  if (isStoreQueryGuide) {
+    replyMessage.push(createStoreQueryGuide());
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 檢查是否為明日班表查詢（精確匹配） ==========
+  var isTomorrowQuery = false;
+  for (var i = 0; i < TOMORROW_KEYWORDS.length; i++) {
+    if (searchContent.toLowerCase() === TOMORROW_KEYWORDS[i].toLowerCase()) {
+      isTomorrowQuery = true;
+      break;
+    }
+  }
+
+  if (isTomorrowQuery) {
+    replyMessage.push(createScheduleMessage(1));
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 檢查是否為今日班表查詢（精確匹配） ==========
+  var isScheduleQuery = false;
+  for (var i = 0; i < SCHEDULE_KEYWORDS.length; i++) {
+    if (searchContent.toLowerCase() === SCHEDULE_KEYWORDS[i].toLowerCase()) {
+      isScheduleQuery = true;
+      break;
+    }
+  }
+
+  if (isScheduleQuery) {
+    replyMessage.push(createScheduleMessage(0));
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 空白查詢不回應（群組內避免誤觸發） ==========
+  if (searchContent.length === 0) {
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 智能雙重查詢：同時搜尋全省聯絡 + 跨店費用 ==========
+  var contactResults = searchContactSheets(searchContent);
+  var storeResult = null;
+  // 嘗試跨店查詢（2-3個英文字母）
+  var storeCodePattern = /^[A-Za-z]{2,3}$/;
+  if (storeCodePattern.test(searchContent)) {
+    storeResult = searchStoreByCode(searchContent.toUpperCase());
+  }
+
+  // ========== 根據查詢結果組合回覆 ==========
+  var hasContactResults = contactResults.length > 0;
+  var hasStoreResult = storeResult !== null;
+  // ✅ 如果電話查詢有結果，就顯示
+  if (hasContactResults || hasStoreResult) {
+    if (hasContactResults && !hasStoreResult) {
+      // 只有全省聯絡
+      if (contactResults.length === 1) {
+        replyMessage.push(createFlexMessage(contactResults[0], searchContent));
+      } else if (contactResults.length <= MAX_BUBBLES) {
+        replyMessage.push(createCarouselMessage(contactResults, searchContent));
+      } else {
+        replyMessage.push({
+          type: "text",
+          text: "🔍 找到 " + contactResults.length + " 筆符合「" + searchContent + "」的資料\n\n" +
+                "📋 以下顯示前 " + MAX_BUBBLES + " 筆結果"
+        });
+        replyMessage.push(createCarouselMessage(contactResults.slice(0, MAX_BUBBLES), searchContent));
+      }
+    } else if (!hasContactResults && hasStoreResult) {
+      // 只有跨店費用
+      replyMessage.push(createStoreInfoMessage(storeResult, searchContent));
+    } else {
+      // 兩者都有！顯示全省聯絡 + 跨店費用
+      if (contactResults.length === 1) {
+        replyMessage.push(createFlexMessage(contactResults[0], searchContent));
+      } else if (contactResults.length <= 3) {
+        replyMessage.push(createCarouselMessage(contactResults, searchContent));
+      } else {
+        replyMessage.push(createCarouselMessage(contactResults.slice(0, 3), searchContent));
+      }
+      // 再顯示跨店費用
+      replyMessage.push(createStoreInfoMessage(storeResult, searchContent));
+    }
+
+    if (replyMessage.length > MAX_REPLY_MESSAGES) {
+      replyMessage = replyMessage.slice(0, MAX_REPLY_MESSAGES);
+    }
+
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+    return ContentService.createTextOutput("OK");
+  }
+
+  // ========== 🆕 最後才執行單號查詢（長度 >= 8 且包含英文） ==========
+  if (searchContent.length >= ORDER_MIN_LENGTH) {
+    // ✅ 必須包含至少 2 個英文字母（避免誤判純數字電話）
+    var hasEnglish = /[A-Za-z]{2,}/.test(searchContent);
+    if (hasEnglish) {
+      var orderResult = searchOrderNumber(searchContent);
+      if (orderResult !== null) {
+        replyMessage.push({
+          type: "text",
+          text: orderResult
+        });
+        sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, replyMessage);
+        return ContentService.createTextOutput("OK");
+      }
+    }
+  }
+
+  // ========== 完全找不到，不回應（避免群組內干擾） ==========
+  return ContentService.createTextOutput("OK");
+}
+/* ==================================================
+   🆕 Gemini 3 Pro
+   ================================================== */
+
+/* ========== 🆕 AI 雙模型設定 ========== */
+var API_KEY = "sk-cqRMbQmXfu1cyGCCbGOeufUmXWSF4iWvZ95uaXCaQvMTnP1c"; 
+var BASE_URL = "https://www.chataiapi.com/v1"; 
+
+// 設定要進行 PK 的兩個模型
+// 建議搭配：gemini-3-pro-preview (邏輯強) vs Claude-3.5-Sonnet (文筆好/寫程式強)
+var MODEL_A_NAME = "gemini-3-pro-preview"; 
+var MODEL_B_NAME = "claude-3-5-sonnet-20240620";
+var VISION_MODEL_NAME = "claude-3-5-sonnet-20240620"; // ✅ 改用 Claude 3.5 Sonnet 處理圖片
+
+/**
+ * 2. 雙模型並行呼叫 (Parallel Execution)
+ */
+function callDualAIModels(prompt) {
+  var url = BASE_URL + "/chat/completions";
+
+  // 共用的 System Prompt
+  var systemPrompt = "角色：台灣專業顧問與貼心朋友。\n" +
+    "任務：用台灣繁體中文回答，口語自然、有溫度。\n" +
+    "限制：\n" +
+    "1.【結論先行】第一句簡短講重點。\n" +
+    "2.【篇幅精簡】總長度控制在 380 字以內，且段落分明，適合手機快速閱讀。\n" +
+    "3.【格式純淨】嚴禁使用 Markdown (如 **粗體**, # 標題)，僅用純文字、Emoji 與分段。\n" +
+    "4.【主動查證】若資訊不確定，可以使用工具搜尋，如果不能上網就請你說明，不要亂編。"
+
+  // 準備兩個請求的 Payload
+  var payloadA = {
+    model: MODEL_A_NAME,
+    messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }],
+    temperature: 0.7
+  };
+
+  var payloadB = {
+    model: MODEL_B_NAME,
+    messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }],
+    temperature: 0.7
+  };
+
+  // 建構請求物件
+  var requestA = {
+    url: url,
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY },
+    payload: JSON.stringify(payloadA),
+    muteHttpExceptions: true
+  };
+
+  var requestB = {
+    url: url, // 使用相同的 URL
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY },
+    payload: JSON.stringify(payloadB),
+    muteHttpExceptions: true
+  };
+
+  try {
+    // 🚀 關鍵技術：使用 fetchAll 同時發射兩個請求 (省時)
+    var responses = UrlFetchApp.fetchAll([requestA, requestB]);
+
+    // 解析結果 A
+    var resultA = "❌ 無法回應";
+    var jsonA = JSON.parse(responses[0].getContentText());
+    if (jsonA.choices && jsonA.choices.length > 0) resultA = jsonA.choices[0].message.content;
+
+    // 解析結果 B
+    var resultB = "❌ 無法回應";
+    var jsonB = JSON.parse(responses[1].getContentText());
+    if (jsonB.choices && jsonB.choices.length > 0) resultB = jsonB.choices[0].message.content;
+
+    return [
+      { model: "🤖 Gemini-3", content: resultA, color: "#10a37f" }, // OpenAI 綠
+      { model: "🧠 Claude 3.5", content: resultB, color: "#da552f" }  // Claude 橘
+    ];
+
+  } catch (e) {
+    Logger.log("雙模型錯誤: " + e);
+    return [
+      { model: MODEL_A_NAME, content: "錯誤: " + e, color: "#999999" },
+      { model: MODEL_B_NAME, content: "錯誤: " + e, color: "#999999" }
+    ];
+  }
+}
+
+/**
+ * 3. 處理圖片辨識 (Vision API)
+ * 專門用來將 Base64 圖片傳給 AI 進行分析
+ */
+function callVisionAI(imageBase64) {
+  var url = BASE_URL + "/chat/completions";
+
+  // 針對群組使用情境優化的提示詞
+  var promptText = "請以影像分析專家身分，精準擷取圖片中所有手寫文字與印刷字元，並以逐行方式完整列出原文內容，明確標示每項文字的字體類型（手寫/印刷），同時重點彙總型號、序號、數字、日期與其他關鍵資訊，最後提供一組「原文逐行」與「關鍵資訊彙總」的整理結果。用台灣繁體中文專業且簡短地回答。";
+
+  var payload = {
+    model: VISION_MODEL_NAME, 
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: promptText },
+          { type: "image_url", image_url: { url: "data:image/jpeg;base64," + imageBase64 } }
+        ]
+      }
+    ],
+    max_tokens: 500
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      method: "post",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    
+    var data = JSON.parse(response.getContentText());
+    if (data.choices && data.choices.length > 0) {
+      return "👁️ 圖片分析結果：\n\n" + data.choices[0].message.content;
+    } else {
+      return "❌ 圖片分析失敗：" + (data.error ? data.error.message : "未知錯誤");
+    }
+  } catch (e) {
+    return "❌ API 連線錯誤: " + e;
+  }
+}
+
+/* 🔧 輔助函式 (保持不變) */
+function getLineImageBlob(messageId) {
+  var url = "https://api-data.line.me/v2/bot/message/" + messageId + "/content";
+  var response = UrlFetchApp.fetch(url, { headers: { "Authorization": "Bearer " + CHANNEL_ACCESS_TOKEN } });
+  return response.getBlob();
+}
+
+function pushMessage(userId, msgObj) {
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + CHANNEL_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: userId, messages: [msgObj] })
+  });
+}
+
+/*==========================================
+=            油價查詢功能區             =
+==========================================*/
+
+/**
+ * 處理油價查詢請求
+ */
+function handleOilPriceRequest(replyToken) {
+  try {
+    var oilPriceData = getOilPriceInfo();
+    if (oilPriceData.success) {
+      var oilPriceFlexMessage = createOilPriceFlexMessage(oilPriceData);
+      sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, [oilPriceFlexMessage]);
+    } else {
+      console.error("油價資訊獲取失敗: " + oilPriceData.message);
+      sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, [{type:"text", text:"無法獲取油價資訊，請稍後再試。錯誤: " + oilPriceData.message}]);
+    }
+  } catch (error) {
+    console.error("處理油價請求錯誤: " + error);
+  }
+}
+
+/**
+ * 獲取油價資訊
+ */
+function getOilPriceInfo() {
+  try {
+    var url = "https://www.cpc.com.tw/GetOilPriceJson.aspx?type=TodayOilPriceString";
+    var options = {
+      muteHttpExceptions: true,
+      followRedirects: true,
+      validateHttpsCertificates: false
+    };
+    var response = UrlFetchApp.fetch(url, options);
+    var responseCode = response.getResponseCode();
+    
+    if (responseCode !== 200) {
+      console.error("中油 API 回應錯誤: " + responseCode);
+      return { success: false, message: "無法連接中油資料服務 (錯誤代碼: " + responseCode + ")" };
+    }
+    
+    var responseText = response.getContentText();
+    var data = JSON.parse(responseText);
+    if (!data) {
+      return { success: false, message: "無法獲取油價資料" };
+    }
+    
+    var oilPriceInfo = {};
+    oilPriceInfo.oil92 = data.sPrice1 || "--";
+    oilPriceInfo.oil95 = data.sPrice2 || "--";
+    oilPriceInfo.oil98 = data.sPrice3 || "--";
+    oilPriceInfo.diesel = data.sPrice4 || "--";
+    
+    var upDownHtml = data.UpOrDown_Html || "";
+    var adjustAmount = "0";
+    var adjustDate = data.PriceUpdate || "";
+    if (upDownHtml) {
+      var directionMatch = upDownHtml.match(/class="sys">([^<]+)<\/b>/i);
+      var direction = directionMatch ? directionMatch[1].trim() : "";
+      var amountMatch = upDownHtml.match(/class="rate"><i>([^<]+)<\/i>/i);
+      var amount = amountMatch ? amountMatch[1].trim() : "0";
+      
+      adjustAmount = direction.indexOf("調漲") !== -1 ? amount : (direction.indexOf("調降") !== -1 ? "-" + amount : "0");
+    }
+    
+    oilPriceInfo.adjustDate = adjustDate;
+    oilPriceInfo.adjustAmount = adjustAmount;
+    var adjustAmountNum = parseFloat(adjustAmount);
+    oilPriceInfo.isIncrease = adjustAmountNum > 0;
+    oilPriceInfo.isDecrease = adjustAmountNum < 0;
+    return {
+      success: true,
+      oilPriceInfo: oilPriceInfo
+    };
+  } catch (error) {
+    console.error("獲取油價資訊錯誤: " + error);
+    return { success: false, message: "處理油價資料時發生錯誤: " + error.toString() };
+  }
+}
+
+/**
+ * 創建油價 Flex Message
+ */
+function createOilPriceFlexMessage(oilPriceData) {
+  var oilInfo = oilPriceData.oilPriceInfo;
+  var adjustIcon = "➡️";
+  var adjustColor = "#1DB446";
+  var adjustText = "本週汽油持平";
+  if (oilInfo.isIncrease) {
+    adjustIcon = "⬆️";
+    adjustColor = "#FF5733";
+    adjustText = "本週汽油調漲 " + Math.abs(parseFloat(oilInfo.adjustAmount)).toFixed(1);
+  } else if (oilInfo.isDecrease) {
+    adjustIcon = "⬇️";
+    adjustColor = "#1DB446";
+    adjustText = "本週汽油調降 " + Math.abs(parseFloat(oilInfo.adjustAmount)).toFixed(1);
+  }
+  
+  var oil92 = oilInfo.oil92 || "--";
+  var oil95 = oilInfo.oil95 || "--";
+  var oil98 = oilInfo.oil98 || "--";
+  var diesel = oilInfo.diesel || "--";
+  return {
+    "type": "flex",
+    "altText": "今日汽柴油零售價格",
+    "contents": {
+      "type": "bubble",
+      "body": {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+          { "type": "text", "text": "今日汽柴油零售價格", "weight": "bold", "size": "xl", "align": "center", "color": "#1DB446" },
+          { "type": "text", "text": oilInfo.adjustDate ? "自" + oilInfo.adjustDate + "零時起實施" : "最新油價資訊", "size": "sm", "align": "center", "color": "#aaaaaa", "margin": "md" },
+          {
+            "type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm",
+            "contents": [
+              {
+                "type": "box", "layout": "horizontal",
+                "contents": [
+                  { "type": "text", "text": adjustIcon, "size": "xl", "color": adjustColor, "flex": 0 },
+                  { "type": "text", "text": adjustText, "size": "lg", "color": adjustColor, "weight": "bold", "align": "center", "flex": 5 },
+                  { "type": "text", "text": Math.abs(parseFloat(oilInfo.adjustAmount)).toFixed(1), "size": "3xl", "color": adjustColor, "weight": "bold", "align": "end", "flex": 3 }
+                ]
+              },
+              { "type": "separator", "margin": "lg" },
+              { "type": "box", "layout": "horizontal", "margin": "lg", "contents": [{ "type": "text", "text": "92無鉛", "size": "sm", "color": "#555555", "flex": 0 }, { "type": "text", "text": oil92, "size": "xl", "color": "#111111", "align": "end", "weight": "bold" }] },
+              { "type": "box", "layout": "horizontal", "margin": "lg", "contents": [{ "type": "text", "text": "95無鉛", "size": "sm", "color": "#555555", "flex": 0 }, { "type": "text", "text": oil95, "size": "xl", "color": "#111111", "align": "end", "weight": "bold" }] },
+              { "type": "box", "layout": "horizontal", "margin": "lg", "contents": [{ "type": "text", "text": "98無鉛", "size": "sm", "color": "#555555", "flex": 0 }, { "type": "text", "text": oil98, "size": "xl", "color": "#111111", "align": "end", "weight": "bold" }] },
+              { "type": "box", "layout": "horizontal", "margin": "lg", "contents": [{ "type": "text", "text": "超級柴油", "size": "sm", "color": "#555555", "flex": 0 }, { "type": "text", "text": diesel, "size": "xl", "color": "#111111", "align": "end", "weight": "bold" }] },
+              { "type": "separator", "margin": "lg" },
+              { "type": "box", "layout": "horizontal", "margin": "lg", "contents": [{ "type": "text", "text": "(單位：元/公升)", "size": "xs", "color": "#aaaaaa", "align": "end" }] }
+            ]
+          }
+        ]
+      },
+      "footer": {
+        "type": "box", "layout": "vertical", "spacing": "sm",
+        "contents": [
+          { "type": "button", "style": "link", "height": "sm", "action": { "type": "uri", "label": "查看更多油價資訊", "uri": "https://www.cpc.com.tw/oilprice.aspx" } },
+          { "type": "box", "layout": "vertical", "contents": [], "margin": "sm" },
+          { "type": "box", "layout": "vertical", "contents": [{ "type": "text", "text": "資料來源：台灣中油", "color": "#aaaaaa", "size": "xs", "align": "center" }], "margin": "sm" }
+        ],
+        "flex": 0
+      }
+    }
+  };
+}
+
+function testOilPrice() {
+  console.log("========== 測試油價查詢 ==========");
+  var oilData = getOilPriceInfo();
+  console.log("查詢結果: " + JSON.stringify(oilData, null, 2));
+  if (oilData.success) {
+    console.log("✅ 油價查詢成功!");
+  } else {
+    console.log("❌ 油價查詢失敗: " + oilData.message);
+  }
+}
+
+/*=====  油價查詢功能區 結束  =====*/
+
+/**
+ * 搜尋全省聯絡和家電MD工作表
+ */
+function searchContactSheets(searchContent) {
+  var allResults = [];
+  for (var i = 0; i < sheetName.length; i++) {
+    var sheet = spreadSheet.getSheetByName(sheetName[i]);
+    if (!sheet) {
+      Logger.log("工作表不存在: " + sheetName[i]);
+      continue;
+    }
+
+    var dataRange = sheet.getDataRange();
+    var values = dataRange.getValues();
+    if (values.length <= 1) {
+      continue;
+    }
+
+    var headers = values[0];
+    var searchColIndex = searchColumn[i] - 1;
+
+    if (searchColIndex < 0 || searchColIndex >= headers.length) {
+      Logger.log("搜尋欄位超出範圍: " + sheetName[i]);
+      continue;
+    }
+
+    // 搜尋資料
+    for (var row = 1; row < values.length; row++) {
+      var cellValue = String(values[row][searchColIndex] || "").trim();
+      var isMatch = false;
+
+      if (fuzzySearch === 1) {
+        isMatch = cellValue.toLowerCase().indexOf(searchContent.toLowerCase()) !== -1;
+      } else {
+        isMatch = cellValue.toLowerCase() === searchContent.toLowerCase();
+      }
+
+      if (isMatch) {
+        var result = {
+          sheetName: sheetName[i],
+          rowNumber: row + 1,
+          data: {}
+        };
+        for (var col = 0; col < headers.length; col++) {
+          result.data[headers[col]] = values[row][col] || "";
+        }
+
+        allResults.push(result);
+      }
+    }
+  }
+
+  return allResults;
+}
+
+/**
+ * 建立班表訊息（Carousel 版 - 今天/明天/後天）
+ */
+function createScheduleMessage(daysOffset) {
+  var sheet = spreadSheet.getSheetByName(SCHEDULE_SHEET_NAME);
+  if (!sheet) {
+    return {
+      type: "text",
+      text: "❌ 找不到班表工作表：" + SCHEDULE_SHEET_NAME + "\n\n請確認工作表名稱是否正確"
+    };
+  }
+
+  var values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return {
+      type: "text",
+      text: "❌ 班表工作表是空的\n\n請先在「" + SCHEDULE_SHEET_NAME + "」工作表中新增資料"
+    };
+  }
+
+  var headers = values[0];
+  var scheduleBubbles = [];
+  // 生成今天、明天、後天的班表
+  for (var dayOffset = 0; dayOffset < 3; dayOffset++) {
+    var targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + dayOffset);
+    var targetDateStr = Utilities.formatDate(targetDate, "GMT+8", "yyyy-MM-dd");
+    var weekday = ["日", "一", "二", "三", "四", "五", "六"][targetDate.getDay()];
+    var dateLabel = dayOffset === 0 ? "今日" : (dayOffset === 1 ? "明日" : "後天");
+
+    var scheduleData = null;
+    // 搜尋對應日期的班表
+    for (var row = 1; row < values.length; row++) {
+      var dateCell = values[row][0];
+      var dateStr = "";
+      
+      if (dateCell instanceof Date) {
+        dateStr = Utilities.formatDate(dateCell, "GMT+8", "yyyy-MM-dd");
+      } else {
+        dateStr = String(dateCell).trim();
+      }
+
+      if (dateStr === targetDateStr) {
+        scheduleData = {
+          date: dateStr,
+          shifts: []
+        };
+        for (var col = 1; col < headers.length; col++) {
+          var timeSlot = headers[col];
+          var staff = values[row][col] || "-";
+          
+          scheduleData.shifts.push({
+            time: String(timeSlot),
+            staff: String(staff)
+          });
+        }
+        break;
+      }
+    }
+
+    // 建立該日期的 Bubble
+    if (scheduleData && scheduleData.shifts.length > 0) {
+      scheduleBubbles.push(createScheduleBubble(scheduleData, targetDateStr, weekday, dateLabel));
+    } else {
+      // 如果沒有班表資料，顯示空白訊息
+      scheduleBubbles.push(createEmptyScheduleBubble(targetDateStr, weekday, dateLabel));
+    }
+  }
+
+  // 如果沒有任何班表，回傳錯誤訊息
+  if (scheduleBubbles.length === 0) {
+    return {
+      type: "text",
+      text: "📅 未來三天都沒有班表資料\n\n💡 請確認「" + SCHEDULE_SHEET_NAME + "」是否已更新"
+    };
+  }
+
+  // 回傳 Carousel Message
+  return {
+    type: "flex",
+    altText: "📅 家電班表（今天/明天/後天）",
+    contents: {
+      type: "carousel",
+      contents: scheduleBubbles
+    }
+  };
+}
+
+/**
+ * 建立單日班表 Bubble
+ */
+function createScheduleBubble(scheduleData, dateStr, weekday, dateLabel) {
+  var bodyContents = [];
+  // 標題區
+  bodyContents.push({
+    type: "box",
+    layout: "vertical",
+    contents: [
+      { type: "text", text: "📅 " + dateLabel + "家電班表", weight: "bold", size: "xxl", color: SCHEDULE_COLOR, align: "center" },
+      { type: "text", text: dateStr + " (星期" + weekday + ")", size: "md", color: "#666666", align: "center", margin: "sm", weight: "bold" }
+    ],
+    paddingBottom: "md"
+  });
+  bodyContents.push({ type: "separator", margin: "md" });
+
+  // 班表內容
+  var shifts = scheduleData.shifts;
+  var maxDisplay = 15;
+
+  for (var i = 0; i < Math.min(shifts.length, maxDisplay); i++) {
+    var shift = shifts[i];
+    bodyContents.push({
+      type: "box",
+      layout: "vertical",
+      margin: "lg",
+      spacing: "sm",
+      contents: [
+        {
+          type: "box",
+          layout: "horizontal",
+          contents: [
+            { type: "text", text: "🚩", size: "lg", flex: 0, margin: "none" },
+            { type: "text", text: shift.time, size: "lg", color: "#666666", weight: "bold", flex: 1, wrap: true, margin: "sm" }
+          ]
+        },
+        {
+          type: "box",
+          layout: "horizontal",
+          spacing: "sm",
+          margin: "sm",
+          contents: [
+            { type: "text", text: "📣", size: "md", flex: 0 },
+            { type: "text", text: shift.staff, size: "xl", color: TEXT_COLOR, weight: "bold", flex: 1, wrap: true }
+          ]
+        },
+        { type: "separator", margin: "md" }
+      ]
+    });
+  }
+
+  // 移除最後一個分隔線
+  if (bodyContents.length > 0) {
+    var lastBox = bodyContents[bodyContents.length - 1];
+    if (lastBox.contents && lastBox.contents.length > 0) {
+      lastBox.contents.pop();
+    }
+  }
+
+  // 如果班表超過顯示上限
+  if (shifts.length > maxDisplay) {
+    bodyContents.push({
+      type: "text",
+      text: "... 還有 " + (shifts.length - maxDisplay) + " 個時段",
+      size: "sm",
+      color: "#999999",
+      align: "center",
+      margin: "md"
+    });
+  }
+
+    // Footer 按鈕
+  var footerContents = {
+    type: "box",
+    layout: "vertical",
+    spacing: "sm",
+    contents: [
+      { type: "button", style: "primary", color: SCHEDULE_COLOR, action: { type: "uri", label: "🔗 完整班表", uri: OTHER_BUTTON_URL } },
+      { type: "button", style: "link", action: { type: "uri", label: "🎏 好日子", uri: "https://www.goodaytw.com/" }, margin: "sm" }
+    ],
+    paddingAll: "15px"
+  };
+  return {
+    type: "bubble",
+    size: "mega",
+    body: { type: "box", layout: "vertical", contents: bodyContents, paddingAll: "20px" },
+    footer: footerContents
+  };
+}
+
+/**
+ * 建立空白班表 Bubble（當該日期沒有班表時）
+ */
+function createEmptyScheduleBubble(dateStr, weekday, dateLabel) {
+  return {
+    type: "bubble",
+    size: "mega",
+    body: {
+      type: "box",
+      layout: "vertical",
+      contents: [
+        { type: "text", text: "📅 " + dateLabel + "家電班表", weight: "bold", size: "xxl", color: SCHEDULE_COLOR, align: "center" },
+        { type: "text", text: dateStr + " (星期" + weekday + ")", size: "md", color: "#666666", align: "center", margin: "sm", weight: "bold" },
+        { type: "separator", margin: "lg" },
+        {
+          type: "box", layout: "vertical", margin: "xl", spacing: "md",
+          contents: [
+            { type: "text", text: "📭", size: "5xl", align: "center", color: "#CCCCCC" },
+            { type: "text", text: "尚無班表資料", size: "lg", color: "#999999", align: "center", weight: "bold", margin: "md" },
+            { type: "text", text: "請確認「" + SCHEDULE_SHEET_NAME + "」\n是否已更新此日期的班表", size: "sm", color: "#AAAAAA", align: "center", wrap: true, margin: "md" }
+          ]
+        }
+      ],
+      paddingAll: "20px"
+    },
+    footer: {
+      type: "box", layout: "vertical", spacing: "sm",
+      contents: [{ type: "button", style: "primary", color: SCHEDULE_COLOR, action: { type: "uri", label: "🔗 完整班表", uri: OTHER_BUTTON_URL } }],
+      paddingAll: "15px"
+    }
+  };
+}
+
+function testScheduleCarousel() {
+  Logger.log("========== 測試班表 Carousel ==========");
+  var message = createScheduleMessage(0);
+  Logger.log("訊息類型: " + message.type);
+  if (message.type === "flex") {
+    Logger.log("Carousel 內容數量: " + message.contents.contents.length);
+  } else {
+    Logger.log("⚠️ 回傳文字訊息: " + message.text);
+  }
+}
+
+/*=====  班表查詢功能區 結束  =====*/
+/**
+ * 建立單筆資料的 Flex Message（含跨店查詢按鈕）
+ */
+function createFlexMessage(result, keyword) {
+  var headers = Object.keys(result.data);
+  var bodyContents = [];
+
+  bodyContents.push({ type: "text", text: result.sheetName, weight: "bold", size: "xxl", color: HEADER_COLOR, wrap: true });
+  bodyContents.push({ type: "separator", margin: "md" });
+
+  var fieldCount = 0;
+  for (var i = 0; i < headers.length && fieldCount < MAX_FIELDS_PER_BUBBLE; i++) {
+    var key = headers[i];
+    var value = String(result.data[key] || "-");
+
+    if (value.length > 150) {
+      value = value.substring(0, 147) + "...";
+    }
+
+    bodyContents.push({
+      type: "box", layout: "vertical", margin: "lg", spacing: "sm",
+      contents: [
+        { type: "text", text: key, size: "md", color: "#999999", weight: "bold", wrap: true },
+        { type: "text", text: value, size: "lg", color: TEXT_COLOR, wrap: true }
+      ]
+    });
+
+    fieldCount++;
+  }
+
+  return {
+    type: "flex",
+    altText: "✅ 查詢結果：" + keyword,
+    contents: {
+      type: "bubble",
+      size: "mega",
+      body: { type: "box", layout: "vertical", contents: bodyContents, paddingAll: "20px" },
+      footer: {
+        type: "box", layout: "vertical", spacing: "sm",
+        contents: [
+          { type: "text", text: "📍 資料來源：第 " + result.rowNumber + " 列", size: "sm", color: "#999999", align: "center", margin: "none" },
+          { type: "separator", margin: "md" },
+          { type: "button", style: "primary", color: STORE_COLOR, action: { type: "message", label: "別按我..自己輸入英文店名", text: "選單" }, margin: "md" }
+        ],
+        paddingAll: "15px"
+      }
+    }
+  };
+}
+
+/**
+ * 建立多筆資料的 Carousel Message
+ */
+function createCarouselMessage(results, keyword) {
+  var bubbles = [];
+  for (var i = 0; i < results.length && i < MAX_BUBBLES; i++) {
+    var result = results[i];
+    var headers = Object.keys(result.data);
+    var bodyContents = [];
+
+    bodyContents.push({ type: "text", text: result.sheetName, weight: "bold", size: "xl", color: HEADER_COLOR, wrap: true });
+    bodyContents.push({ type: "text", text: "#" + (i + 1), size: "sm", color: "#999999", margin: "xs" });
+    bodyContents.push({ type: "separator", margin: "md" });
+    
+    var fieldCount = 0;
+    for (var j = 0; j < headers.length && fieldCount < 5; j++) {
+      var key = headers[j];
+      var value = String(result.data[key] || "-");
+
+      if (value.length > 60) {
+        value = value.substring(0, 57) + "...";
+      }
+
+      bodyContents.push({
+        type: "box", layout: "vertical", margin: "md", spacing: "xs",
+        contents: [
+          { type: "text", text: key, size: "sm", color: "#999999", weight: "bold", wrap: true },
+          { type: "text", text: value, size: "md", color: TEXT_COLOR, wrap: true }
+        ]
+      });
+      fieldCount++;
+    }
+
+    bubbles.push({
+      type: "bubble",
+      body: { type: "box", layout: "vertical", contents: bodyContents, paddingAll: "18px" },
+      footer: {
+        type: "box", layout: "vertical", spacing: "sm",
+        contents: [{ type: "text", text: "📍 第 " + result.rowNumber + " 列", size: "xs", color: "#999999", align: "center" }],
+        paddingAll: "12px"
+      }
+    });
+  }
+
+  return {
+    type: "flex",
+    altText: "✅ 找到 " + results.length + " 筆結果：" + keyword,
+    contents: { type: "carousel", contents: bubbles }
+  };
+}
+
+/**
+ * 根據店別代碼搜尋跨區費用
+ */
+function searchStoreByCode(storeCode) {
+  var allSheets = spreadSheet.getSheets();
+  for (var i = 0; i < allSheets.length; i++) {
+    var sheetName = allSheets[i].getName();
+    if (sheetName.toUpperCase().indexOf(storeCode) !== -1) {
+      var targetSheet = allSheets[i];
+      var values = targetSheet.getDataRange().getValues();
+      if (values.length <= 2) {
+        continue;
+      }
+
+      var storeInfo = {
+        sheetName: sheetName,
+        storeName: "",
+        fees: []
+      };
+      if (values[0] && values[0][0]) {
+        var firstCell = String(values[0][0]);
+        storeInfo.storeName = firstCell;
+      }
+
+      for (var row = 2; row < values.length; row++) {
+        var fee = values[row][0];
+        var area = values[row][1];
+        
+        if (fee !== "" && area !== "") {
+          storeInfo.fees.push({
+            fee: String(fee),
+            area: String(area)
+          });
+        }
+      }
+
+      if (storeInfo.fees.length > 0) {
+        return storeInfo;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 建立跨店查詢指南
+ */
+function createStoreQueryGuide() {
+  return {
+    type: "flex",
+    altText: "🏪 查詢說明",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "vertical",
+        contents: [
+          { type: "text", text: "🏪 查詢", weight: "bold", size: "xxl", color: STORE_COLOR, align: "center" },
+          { type: "separator", margin: "lg" },
+          {
+            type: "box", layout: "vertical", margin: "lg", spacing: "md",
+            contents: [
+              { type: "text", text: "✨✨✨✨✨", size: "lg", color: TEXT_COLOR, weight: "bold", align: "center" },
+              { type: "text", text: "輸入店別代碼，自動顯示：\n• 全省聯絡資料\n• 跨店費用資料\n• 建議使用「英文店名」查詢\n• (*如需查詢安裝完工請輸入電話)", size: "md", color: "#666666", align: "center", margin: "sm", wrap: true }
+            ]
+          },
+          {
+            type: "box", layout: "vertical", margin: "lg", spacing: "sm",
+            contents: [
+              { type: "text", text: "💡 使用範例", size: "sm", color: "#999999", weight: "bold" },
+              { type: "text", text: "輸入「WG」同時顯示聯絡資料和跨區費用\n→ 輸入電話查詢非衛星犬安裝完工舊資料", size: "sm", color: TEXT_COLOR, wrap: true }
+            ]
+          }
+        ],
+        paddingAll: "20px"
+      }
+    }
+  };
+}
+
+/**
+ * 建立店別資訊訊息
+ */
+function createStoreInfoMessage(storeInfo, searchKeyword) {
+  var bodyContents = [];
+  bodyContents.push({ type: "text", text: "🏪 跨區費用查詢", weight: "bold", size: "xxl", color: STORE_COLOR, align: "center" });
+  bodyContents.push({ type: "text", text: storeInfo.storeName, size: "lg", color: "#666666", align: "center", margin: "sm", wrap: true });
+  bodyContents.push({ type: "text", text: "店別代碼：" + searchKeyword.toUpperCase(), size: "sm", color: "#999999", align: "center", margin: "xs" });
+  bodyContents.push({ type: "separator", margin: "lg" });
+
+  var maxDisplay = 12;
+  for (var i = 0; i < Math.min(storeInfo.fees.length, maxDisplay); i++) {
+    var feeItem = storeInfo.fees[i];
+    bodyContents.push({
+      type: "box", layout: "vertical", margin: "lg", spacing: "sm",
+      contents: [
+        {
+          type: "box", layout: "horizontal",
+          contents: [{ type: "text", text: "💰", size: "lg", flex: 0 }, { type: "text", text: feeItem.fee, size: "xl", color: STORE_COLOR, weight: "bold", flex: 1, margin: "sm" }]
+        },
+        {
+          type: "box", layout: "horizontal", spacing: "sm", margin: "sm",
+          contents: [{ type: "text", text: "📍", size: "md", flex: 0 }, { type: "text", text: feeItem.area, size: "md", color: TEXT_COLOR, flex: 1, wrap: true }]
+        },
+        { type: "separator", margin: "md" }
+      ]
+    });
+  }
+
+  if (bodyContents.length > 0) {
+    var lastBox = bodyContents[bodyContents.length - 1];
+    if (lastBox.contents && lastBox.contents.length > 0) {
+      lastBox.contents.pop();
+    }
+  }
+
+  if (storeInfo.fees.length > maxDisplay) {
+    bodyContents.push({ type: "text", text: "... 還有 " + (storeInfo.fees.length - maxDisplay) + " 個區域", size: "sm", color: "#999999", align: "center", margin: "md" });
+  }
+
+  return {
+    type: "flex",
+    altText: "🏪 " + storeInfo.storeName + " 跨區費用",
+    contents: {
+      type: "bubble", size: "mega",
+      body: { type: "box", layout: "vertical", contents: bodyContents, paddingAll: "20px" }
+    }
+  };
+}
+
+/**
+ * 發送回覆訊息
+ */
+function sendReplyMessage(token, replyToken, messages) {
+  var url = "https://api.line.me/v2/bot/message/reply";
+  var payload = { replyToken: replyToken, messages: messages };
+  var options = {
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  try {
+    var response = UrlFetchApp.fetch(url, options);
+    var responseCode = response.getResponseCode();
+    if (responseCode !== 200) {
+      Logger.log("LINE API Error: " + response.getContentText());
+    }
+  } catch (err) {
+    Logger.log("Send message error: " + err);
+  }
+}
+
+/**
+ * 測試智能雙重查詢
+ */
+function testSmartQuery() {
+  Logger.log("========== 測試智能雙重查詢 ==========");
+  var testKeywords = ["WG", "五甲", "NZ"];
+  for (var i = 0; i < testKeywords.length; i++) {
+    var keyword = testKeywords[i];
+    Logger.log("\n測試關鍵字：" + keyword);
+    var contactResults = searchContactSheets(keyword);
+    Logger.log("📋 全省聯絡：" + contactResults.length + " 筆");
+    var storeCodePattern = /^[A-Za-z]{2,3}$/;
+    if (storeCodePattern.test(keyword)) {
+      var storeResult = searchStoreByCode(keyword.toUpperCase());
+      if (storeResult) {
+        Logger.log("🏪 跨店費用：找到 - " + storeResult.storeName);
+      } else {
+        Logger.log("🏪 跨店費用：找不到");
+      }
+    } else {
+      Logger.log("🏪 跨店費用：不符合店別代碼格式");
+    }
+    Logger.log("---");
+  }
+}
+
+/**
+ * 測試完整流程
+ */
+function testAll() {
+  Logger.log("========== 完整測試 ==========");
+  testSmartQuery();
+  Logger.log("\n");
+  testOilPrice();
+}
+
+/*==========================================
+=            功能選單系統             =
+==========================================*/
+
+/**
+ * 創建功能選單 Flex Message
+ */
+function createFunctionMenu() {
+  return {
+    type: "flex",
+    altText: "🎯 功能選單",
+    contents: {
+      type: "carousel",
+      contents: [
+        // 第一頁：班表查詢
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "📅 班表查詢", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: SCHEDULE_COLOR, spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "查詢家電部門班表", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "md", contents: [{ type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: SCHEDULE_COLOR }, { type: "text", text: "• 輸入 班表。\n• 會自動顯示近3日班表", size: "sm", color: "#666666", wrap: true, margin: "sm" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", action: { type: "message", label: "📅 班表", text: "班表" }, color: SCHEDULE_COLOR }], flex: 0, paddingAll: "15px" }
+        },
+        // 第二頁：店別查詢
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "🏪 店別查詢", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: STORE_COLOR, spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "查詢各店聯絡資料與跨店費用", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "md", contents: [{ type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: STORE_COLOR }, { type: "text", text: "• 輸入店別代碼（如：WG、NZ）\n• 自動顯示聯絡資料和跨店費用", size: "sm", color: "#666666", wrap: true, margin: "sm" }] },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "sm", contents: [{ type: "text", text: "💡 範例", size: "sm", weight: "bold", color: "#999999" }, { type: "text", text: "輸入英文代碼「WG」", size: "xs", color: "#999999", margin: "xs" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", action: { type: "message", label: "📖 不要按", text: "WG" }, color: STORE_COLOR }], flex: 0, paddingAll: "15px" }
+        },
+        // 第三頁：MD資料查詢
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "🤖 MD資料查詢", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: THEME_COLOR, spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "查詢家電MD聯絡資料", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "md", contents: [{ type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: THEME_COLOR }, { type: "text", text: "• 輸入部門+MD\n• 系統會搜尋「🤖家電MD」工作表", size: "sm", color: "#666666", wrap: true, margin: "sm" }] },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "sm", contents: [{ type: "text", text: "💡 範例", size: "sm", weight: "bold", color: "#999999" }, { type: "text", text: "輸入「40MD」或「49MD」", size: "xs", color: "#999999", margin: "xs" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "text", text: "直接輸入關鍵字即可查詢", size: "xs", color: "#999999", align: "center" }], flex: 0, paddingAll: "15px" }
+        },
+        // 第四頁：AI助手 (已更新描述)
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "🤖 AI 智能助手", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: AI_COLOR, spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "Gemini 3 Pro", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              {
+                type: "box", layout: "vertical", margin: "lg", spacing: "md",
+                contents: [
+                  { type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: AI_COLOR },
+                  { type: "text", text: "• 輸入「AI + 問題」: 文字問答\n", size: "sm", color: "#666666", wrap: true, margin: "sm" }
+                ]
+              },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "sm", contents: [{ type: "text", text: "💡 範例", size: "sm", weight: "bold", color: "#999999" }, { type: "text", text: "AI 你好\nAI 識別 (然後傳圖)\nAI 畫 一隻貓", size: "xs", color: "#999999", margin: "xs" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", action: { type: "message", label: "🤖 試試看", text: "AI 你好" }, color: AI_COLOR }], flex: 0, paddingAll: "15px" }
+        },
+        // 第五頁:油價查詢
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "⛽ 今日油價", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: OIL_COLOR, spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "查詢台灣中油最新油價", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "md", contents: [{ type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: OIL_COLOR }, { type: "text", text: "• 輸入「加油」即可查詢\n• 顯示92/95/98無鉛汽油\n• 顯示超級柴油價格\n• 顯示本週調漲/調降資訊", size: "sm", color: "#666666", wrap: true, margin: "sm" }] },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "sm", contents: [{ type: "text", text: "💡 資料來源", size: "sm", weight: "bold", color: "#999999" }, { type: "text", text: "德中油官方即時資料", size: "xs", color: "#999999", margin: "xs" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", action: { type: "message", label: "⛽ 查詢油價", text: "加油" }, color: OIL_COLOR }], flex: 0, paddingAll: "15px" }
+        },
+        // 第六頁：家電安裝運費
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "🚚 安裝運費", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: "#FF6B35", spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "家電安裝與運送費用", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "md", contents: [{ type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: "#FF6B35" }, { type: "text", text: "• 輸入「運費」\n• 系統會跳出收費表圖片", size: "sm", color: "#666666", wrap: true, margin: "sm" }] },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "sm", contents: [{ type: "text", text: "💡 範例", size: "sm", weight: "bold", color: "#999999" }, { type: "text", text: "輸入「運費」", size: "xs", color: "#999999", margin: "xs" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", action: { type: "message", label: "📋 查看費用", text: "運費" }, color: "#FF6B35" }], flex: 0, paddingAll: "15px" }
+        },
+        // 第七頁：美食推薦
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "🍽️ 美食推薦", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: FOOD_COLOR, spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "用定位幫你找附近餐廳", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "md", contents: [{ type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: FOOD_COLOR }, { type: "text", text: "• 輸入：美食 或 餓餓\n• 全球任何位置都能定位\n• 再選擇料理類型：中式料理、日式料理、火鍋…", size: "sm", color: "#666666", wrap: true, margin: "sm" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", action: { type: "message", label: "🍽️ 我餓了", text: "吃什麼" }, color: FOOD_COLOR }], flex: 0, paddingAll: "15px" }
+        },
+        // 第八頁：股票查詢
+        {
+          type: "bubble", size: "mega",
+          header: { type: "box", layout: "vertical", contents: [{ type: "text", text: "📊 股票查詢", color: "#ffffff", align: "center", size: "xl", weight: "bold" }], paddingAll: "20px", backgroundColor: "#673AB7", spacing: "md", height: "80px", paddingTop: "22px" },
+          body: {
+            type: "box", layout: "vertical",
+            contents: [
+              { type: "text", text: "查詢台股技術面與基本面", color: "#666666", size: "sm", wrap: true, align: "center" },
+              { type: "separator", margin: "lg" },
+              { type: "box", layout: "vertical", margin: "lg", spacing: "md", contents: [{ type: "text", text: "📌 使用說明", size: "md", weight: "bold", color: "#673AB7" }, { type: "text", text: "• 輸入：股票＋股票代碼\n• 例：股票2330、股票 0050\n• 顯示技術指標、基本面、法人籌碼與新聞• 數值為證交所+FinMind,可能延遲非最新", size: "sm", color: "#666666", wrap: true, margin: "sm" }] }
+            ],
+            spacing: "md", paddingAll: "20px"
+          },
+          footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", action: { type: "message", label: "📊 查台積電", text: "股票2330" }, color: "#673AB7" }], flex: 0, paddingAll: "15px" }
+        }
+      ]
+    }
+  };
+}
+
+/**
+ * 測試功能選單
+ */
+function testMenu() {
+  Logger.log("========== 測試功能選單 ==========");
+  var menu = createFunctionMenu();
+  Logger.log("選單類型: " + menu.type);
+  Logger.log("選單內容: " + JSON.stringify(menu.contents, null, 2));
+  Logger.log("✅ 功能選單創建成功!");
+}
+
+/*=====  功能選單系統 結束  =====*/
+
+/*==========================================
+=            單號查詢功能區             =
+==========================================*/
+
+/**
+ * 查詢單號資訊（支援多分頁）
+ */
+function searchOrderNumber(orderNumber) {
+  var ss = SpreadsheetApp.openById(spreadSheetId);
+  var sheets = ss.getSheets();
+  var results = [];
+  
+  // 遍歷所有分頁
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    var sheetName = sheet.getName();
+    
+    // 跳過系統工作表
+    if (sheetName.indexOf("📋") !== -1 || 
+        sheetName.indexOf("🤖") !== -1 || 
+        sheetName.indexOf("📅") !== -1) {
+      continue;
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    // 搜尋單號（不區分大小寫）
+    for (var row = 0; row < data.length; row++) {
+      for (var col = 0; col < data[row].length; col++) {
+        var cellValue = String(data[row][col]).trim().toUpperCase();
+        var searchValue = orderNumber.toUpperCase();
+        
+        if (cellValue === searchValue) {
+          var result = extractOrderInfo(sheet, data, row, sheetName);
+          if (result) {
+            results.push(result);
+          }
+          break;
+        }
+      }
+    }
+  }
+  
+  // 找不到就回傳 null（不回應）
+  if (results.length === 0) {
+    return null;
+  }
+  
+  return formatOrderResults(results, orderNumber);
+}
+
+/**
+ * 提取訂單資訊
+ */
+function extractOrderInfo(sheet, data, row, sheetName) {
+  try {
+    var date = extractDateFromData(data, row);
+    // 提取負責人員
+    var staff = "";
+    for (var col = 0; col < Math.min(data[row].length, 5); col++) {
+      var cellValue = String(data[row][col]).trim();
+      if (cellValue && cellValue.length < 20 && cellValue.length > 0) {
+        if (!/\d{8,}/.test(cellValue)) {  // 排除長數字
+          staff = cellValue;
+          break;
+        }
+      }
+    }
+    
+    // 提取單號
+    var orderNum = "";
+    for (var col = 0; col < data[row].length; col++) {
+      var cellValue = String(data[row][col]).trim();
+      if (cellValue.length >= 8 && /[A-Z]{2,}/.test(cellValue.toUpperCase())) {
+        orderNum = cellValue;
+        break;
+      }
+    }
+    
+    // 提取商品和金額
+    var products = [];
+    for (var col = 0; col < data[row].length; col++) {
+      var cellValue = data[row][col];
+      if (!isNaN(cellValue) && cellValue !== "" && cellValue > 0) {
+        var numValue = Number(cellValue);
+        if (numValue >= 100) {
+          if (data[0] && data[0][col]) {
+            var productName = String(data[0][col]).trim();
+            if (productName && productName !== "金額" && productName !== "合計") {
+              products.push(productName + ": $" + numValue);
+            }
+          }
+        }
+      }
+    }
+    
+    return {
+      date: date,
+      staff: staff || "未知",
+      orderNumber: orderNum,
+      products: products.length > 0 ? products.join("\n") : "無商品資訊",
+      sheetName: sheetName
+    };
+  } catch (err) {
+    Logger.log("提取訂單資訊錯誤: " + err);
+    return null;
+  }
+}
+
+/**
+ * 從資料中提取日期
+ */
+function extractDateFromData(data, targetRow) {
+  for (var row = targetRow; row >= 0; row--) {
+    for (var col = 0; col < data[row].length; col++) {
+      var cellValue = String(data[row][col]);
+      if (cellValue.match(/\d{4}\/\d{1,2}\/\d{1,2}/)) {
+        return cellValue.match(/\d{4}\/\d{1,2}\/\d{1,2}/)[0];
+      }
+    }
+  }
+  return "未知日期";
+}
+
+/**
+ * 格式化查詢結果
+ */
+function formatOrderResults(results, orderNumber) {
+  var message = "🔍 單號查詢結果\n";
+  message += "━━━━━━━━━\n\n";
+  results.forEach(function(result, index) {
+    if (index > 0) {
+      message += "\n\n\n";
+    }
+    message += "📋 單號：" + result.orderNumber + "\n";
+    message += "👤 負責人員：" + result.staff + "\n";
+    message += "📂 來源：" + result.sheetName;
+  });
+  return message;
+}
+
+/**
+ * 測試單號查詢
+ */
+function testOrderSearch() {
+  Logger.log("========== 測試單號查詢 ==========");
+  var testOrders = ["WG2508170018", "NZ2508160052", "不存在的單號"];
+  testOrders.forEach(function(orderNum) {
+    Logger.log("\n查詢單號: " + orderNum);
+    var result = searchOrderNumber(orderNum);
+    if (result !== null) {
+      Logger.log(result);
+    } else {
+      Logger.log("❌ 查無此單號（不回應）");
+    }
+    Logger.log("---");
+  });
+}
+
+/*=====  單號查詢功能區 結束  =====*/
+
+/*==========================================
+=            🆕 美食推薦功能區             =
+==========================================*/
+
+/**
+ * 處理美食推薦請求 - 先選擇類型
+ */
+function handleFoodRecommendation(event) {
+  var replyToken = event.replyToken;
+  var message = {
+    type: "text",
+    text: "🍽️ 選擇餐廳類型，或直接分享位置隨機推薦 👇",
+    quickReply: {
+      items: [
+        { type: "action", action: { type: "message", label: "🥢 中式料理", text: "中式料理" } },
+        { type: "action", action: { type: "message", label: "🍣 日式料理", text: "日式料理" } },
+        { type: "action", action: { type: "message", label: "🍜 韓式料理", text: "韓式料理" } },
+        { type: "action", action: { type: "message", label: "🍝 義式料理", text: "義式料理" } },
+        { type: "action", action: { type: "message", label: "🍔 美式料理", text: "美式料理" } },
+        { type: "action", action: { type: "message", label: "🌶️泰式料理", text: "泰式料理" } },
+        { type: "action", action: { type: "message", label: "☕ 咖啡廳", text: "咖啡廳" } },
+        { type: "action", action: { type: "message", label: "🍟 速食", text: "速食" } },
+        { type: "action", action: { type: "message", label: "🍲 火鍋", text: "火鍋" } },
+        { type: "action", action: { type: "message", label: "🥩 燒烤", text: "燒烤" } },
+        { type: "action", action: { type: "location", label: "📍 隨機推薦" } }
+      ]
+    }
+  };
+  sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, [message]);
+}
+
+/**
+ * 處理餐廳類型選擇
+ */
+function handleRestaurantType(event, restaurantType) {
+  var replyToken = event.replyToken;
+  var userId = event.source.userId;
+  // 儲存用戶選擇的餐廳類型
+  var userProperties = PropertiesService.getUserProperties();
+  userProperties.setProperty(userId + "_restaurant_type", restaurantType);
+  var message = {
+    type: "text",
+    text: "👍 好的！搜尋" + restaurantType + "\n\n請確認你的位置 📍",
+    quickReply: {
+      items: [
+        { type: "action", action: { type: "location", label: "📍 分享位置(查找半徑範圍1000M)" } }
+      ]
+    }
+  };
+  sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, [message]);
+}
+
+/**
+ * 處理位置訊息，搜尋附近餐廳
+ */
+function handleLocationForFood(event) {
+  var replyToken = event.replyToken;
+  var userId = event.source.userId;
+  var latitude = event.message.latitude;
+  var longitude = event.message.longitude;
+  
+  // 取得用戶選擇的餐廳類型
+  var userProperties = PropertiesService.getUserProperties();
+  var selectedType = userProperties.getProperty(userId + "_restaurant_type");
+  
+  // 搜尋附近餐廳
+  var restaurants = searchNearbyRestaurants(latitude, longitude, SEARCH_RADIUS, selectedType);
+  // 清除已儲存的類型
+  userProperties.deleteProperty(userId + "_restaurant_type");
+  
+  if (restaurants.length === 0) {
+    var message = {
+      type: "text",
+      text: "😅 抱歉，附近找不到" + (selectedType ? selectedType : "餐廳") + "資訊\n\n請試試其他類型或位置"
+    };
+    sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, [message]);
+    return;
+  }
+  
+  // 取前 5 間餐廳
+  var topRestaurants = restaurants.slice(0, Math.min(9, restaurants.length));
+  // 建立輪播卡片
+  var carouselMessage = createRestaurantCarousel(topRestaurants, latitude, longitude);
+  
+  sendReplyMessage(CHANNEL_ACCESS_TOKEN, replyToken, [carouselMessage]);
+}
+
+/**
+ * 使用 Google Places API 搜尋附近餐廳
+ */
+function searchNearbyRestaurants(latitude, longitude, radius, restaurantType) {
+  var url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
+  var params = {
+    location: latitude + "," + longitude,
+    radius: radius,
+    language: "zh-TW",
+    key: GOOGLE_PLACES_API_KEY
+  };
+  if (restaurantType && RESTAURANT_TYPES[restaurantType]) {
+    params.type = "restaurant";
+    params.keyword = restaurantType;
+  } else {
+    params.type = "restaurant";
+  }
+  
+  var queryString = Object.keys(params).map(function(key) {
+    return key + "=" + encodeURIComponent(params[key]);
+  }).join("&");
+  var response = UrlFetchApp.fetch(url + "?" + queryString);
+  var data = JSON.parse(response.getContentText());
+  if (data.status === "OK") {
+    return data.results.sort(function(a, b) {
+      return (b.rating || 0) - (a.rating || 0);
+    });
+  } else {
+    Logger.log("Google Places API Error: " + data.status);
+    return [];
+  }
+}
+
+/**
+ * 取得餐廳詳細資訊
+ */
+function getRestaurantDetails(placeId) {
+  var url = "https://maps.googleapis.com/maps/api/place/details/json";
+  var params = {
+    place_id: placeId,
+    fields: "name,rating,formatted_phone_number,opening_hours,price_level,photos,geometry,formatted_address",
+    language: "zh-TW",
+    key: GOOGLE_PLACES_API_KEY
+  };
+  var queryString = Object.keys(params).map(function(key) {
+    return key + "=" + encodeURIComponent(params[key]);
+  }).join("&");
+  var response = UrlFetchApp.fetch(url + "?" + queryString);
+  var data = JSON.parse(response.getContentText());
+  if (data.status === "OK") {
+    return data.result;
+  } else {
+    Logger.log("Google Places API Error: " + data.status);
+    return null;
+  }
+}
+
+/**
+ * 取得餐廳照片 URL
+ */
+function getPhotoUrl(photoReference, maxWidth) {
+  maxWidth = maxWidth || 400;
+  if (!photoReference) {
+    return "https://via.placeholder.com/400x300/FF6B6B/FFFFFF?text=No+Image";
+  }
+  
+  return "https://maps.googleapis.com/maps/api/place/photo?maxwidth=" + maxWidth + 
+         "&photo_reference=" + photoReference + 
+         "&key=" + GOOGLE_PLACES_API_KEY;
+}
+
+/**
+ * 計算兩點之間的距離（公尺）
+ */
+function calculateDistance(lat1, lng1, lat2, lng2) {
+  var R = 6371000;
+  var dLat = (lat2 - lat1) * Math.PI / 180;
+  var dLng = (lng2 - lng1) * Math.PI / 180;
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+          Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  var distance = R * c;
+  
+  return Math.round(distance);
+}
+
+/**
+ * 格式化距離顯示
+ */
+function formatDistance(meters) {
+  if (meters < 1000) {
+    return meters + " 公尺";
+  } else {
+    return (meters / 1000).toFixed(1) + " 公里";
+  }
+}
+
+/**
+ * 取得今日營業時間
+ */
+function getTodayOpeningHours(openingHours) {
+  if (!openingHours || !openingHours.weekday_text) {
+    return "營業時間未提供";
+  }
+  
+  var today = new Date().getDay();
+  var index = today === 0 ? 6 : today - 1;
+  var todayHours = openingHours.weekday_text[index];
+  
+  if (todayHours) {
+    todayHours = todayHours.replace(/^[^:]+:\s*/, "");
+  }
+  
+  return todayHours || "營業時間未提供";
+}
+
+/**
+ * 建立餐廳輪播 Carousel Message
+ */
+function createRestaurantCarousel(restaurants, userLat, userLng) {
+  var bubbles = [];
+  for (var i = 0; i < restaurants.length; i++) {
+    var restaurant = restaurants[i];
+    var bubble = createRestaurantBubble(restaurant, userLat, userLng);
+    bubbles.push(bubble);
+  }
+  
+  return {
+    type: "flex",
+    altText: "🍽️ 為你推薦 " + restaurants.length + " 間餐廳",
+    contents: {
+      type: "carousel",
+      contents: bubbles
+    }
+  };
+}
+
+/**
+ * 建立單一餐廳 Bubble
+ */
+function createRestaurantBubble(restaurant, userLat, userLng) {
+  var name = restaurant.name || "未知餐廳";
+  var rating = restaurant.rating || 0;
+  var address = restaurant.vicinity || "地址未提供";
+  var placeId = restaurant.place_id;
+  
+  var lat = restaurant.geometry.location.lat;
+  var lng = restaurant.geometry.location.lng;
+  var distance = calculateDistance(userLat, userLng, lat, lng);
+  var distanceText = formatDistance(distance);
+  
+  var details = getRestaurantDetails(placeId);
+  var phone = details && details.formatted_phone_number ? details.formatted_phone_number : "電話未提供";
+  var isOpen = details && details.opening_hours ? details.opening_hours.open_now : null;
+  var priceLevel = details && details.price_level ? details.price_level : 0;
+  var openingHours = details && details.opening_hours ? getTodayOpeningHours(details.opening_hours) : "營業時間未提供";
+  var openStatus = "";
+  var openStatusColor = "#999999";
+  if (isOpen === true) {
+    openStatus = "🟢 營業中";
+    openStatusColor = "#06C755";
+  } else if (isOpen === false) {
+    openStatus = "🔴 已打烊";
+    openStatusColor = "#FF0000";
+  } else {
+    openStatus = "❓ 營業資訊未提供";
+  }
+  
+  var priceText = "";
+  for (var i = 0; i < priceLevel; i++) {
+    priceText += "💰";
+  }
+  if (priceText === "") {
+    priceText = "價格未提供";
+  }
+  
+  var photoUrl = "https://via.placeholder.com/400x300/FF6B6B/FFFFFF?text=No+Image";
+  if (restaurant.photos && restaurant.photos.length > 0) {
+    photoUrl = getPhotoUrl(restaurant.photos[0].photo_reference, 400);
+  }
+  
+  var mapsUrl = "https://www.google.com/maps/search/?api=1&query=" + lat + "," + lng + "&query_place_id=" + placeId;
+  var ratingStars = "";
+  var fullStars = Math.floor(rating);
+  for (var i = 0; i < fullStars; i++) {
+    ratingStars += "⭐";
+  }
+  if (rating % 1 >= 0.5) {
+    ratingStars += "✨";
+  }
+  
+  var bubble = {
+    type: "bubble",
+    size: "mega",
+    hero: {
+      type: "image",
+      url: photoUrl,
+      size: "full",
+      aspectRatio: "20:13",
+      aspectMode: "cover",
+      action: { type: "uri", uri: mapsUrl }
+    },
+    body: {
+      type: "box", layout: "vertical",
+      contents: [
+        { type: "text", text: name, weight: "bold", size: "xl", wrap: true, maxLines: 2 },
+        {
+          type: "box", layout: "baseline", margin: "md",
+          contents: [
+            { type: "text", text: ratingStars + " " + rating.toFixed(1), size: "sm", color: FOOD_COLOR, flex: 0, weight: "bold" },
+            { type: "text", text: openStatus, size: "sm", color: openStatusColor, margin: "md", weight: "bold", flex: 0 }
+          ]
+        },
+        {
+          type: "box", layout: "baseline", margin: "sm",
+          contents: [{ type: "text", text: "📏 " + distanceText, size: "xs", color: "#8c8c8c", flex: 0 }]
+        },
+        {
+          type: "box", layout: "vertical", margin: "lg", spacing: "sm",
+          contents: [
+            {
+              type: "box", layout: "baseline", spacing: "sm",
+              contents: [{ type: "text", text: "⏰", color: "#aaaaaa", size: "sm", flex: 1 }, { type: "text", text: openingHours, wrap: true, color: "#666666", size: "sm", flex: 5 }]
+            },
+            {
+              type: "box", layout: "baseline", spacing: "sm",
+              contents: [{ type: "text", text: "💰", color: "#aaaaaa", size: "sm", flex: 1 }, { type: "text", text: priceText, wrap: true, color: "#666666", size: "sm", flex: 5 }]
+            },
+            {
+              type: "box", layout: "baseline", spacing: "sm",
+              contents: [{ type: "text", text: "📍", color: "#aaaaaa", size: "sm", flex: 1 }, { type: "text", text: address, wrap: true, color: "#666666", size: "sm", flex: 5, maxLines: 2 }]
+            },
+            {
+              type: "box", layout: "baseline", spacing: "sm",
+              contents: [
+                { type: "text", text: "📞", color: "#aaaaaa", size: "sm", flex: 1 },
+                {
+                  type: "text", text: phone, wrap: true, color: "#666666", size: "sm", flex: 5,
+                  action: phone !== "電話未提供" ? { type: "uri", uri: "tel:" + phone.replace(/[^0-9+]/g, "") } : undefined
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    footer: {
+      type: "box", layout: "vertical", spacing: "sm",
+      contents: [
+        { type: "button", style: "primary", height: "sm", color: FOOD_COLOR, action: { type: "uri", label: "🗺️ 查看地圖", uri: mapsUrl } },
+        { type: "button", style: "link", height: "sm", action: { type: "message", label: "🔄 重新推薦", text: "吃什麼" } }
+      ],
+      flex: 0
+    }
+  };
+  return bubble;
+}
+
+/*=====  美食推薦功能區 結束  =====*/
+
+/**
+ * 建立雙模型比較 Carousel
+ */
+function createDualAIComparisonFlex(results, prompt) {
+  var bubbles = [];
+
+  // 遍歷兩個模型的結果，製作兩個 Bubble
+  for (var i = 0; i < results.length; i++) {
+    var item = results[i];
+    
+    bubbles.push({
+      type: "bubble",
+      size: "mega",
+      header: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: item.model, color: "#ffffff", weight: "bold", size: "xl" }
+        ],
+        backgroundColor: item.color,
+        paddingAll: "15px"
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          // 顯示用戶的問題 (小字)
+          { type: "text", text: "Q: " + prompt, size: "xs", color: "#aaaaaa", wrap: true, maxLines: 2 },
+          { type: "separator", margin: "md" },
+          // 顯示 AI 回答
+          { type: "text", text: item.content, size: "sm", color: "#333333", wrap: true, margin: "md" }
+        ],
+        paddingAll: "20px"
+      }
+    });
+  }
+
+  return {
+    type: "flex",
+    altText: "🤖 智能雙模型：" + prompt,
+    contents: {
+      type: "carousel", // 設定為輪播格式
+      contents: bubbles
+    }
+  };
+}
