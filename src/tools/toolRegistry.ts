@@ -64,7 +64,8 @@ export const ToolRegistry: Record<string, Tool> = {
             try {
                 await fs.mkdir(dataDir, { recursive: true });
                 await fs.writeFile(path.join(dataDir, args.filename), args.content);
-                return `✅ 已為您將內容寫入本機檔案：\n📂 location: /data/${args.filename}`;
+                // Return content so AI can show it to user
+                return `✅ 已為您將內容寫入本機檔案：/data/${args.filename}\n\n內容如下：\n${args.content}`;
             } catch (err: any) {
                 return `❌ 寫入失敗: ${err.message}`;
             }
