@@ -38,10 +38,36 @@ export const ToolRegistry: Record<string, Tool> = {
             required: ['query']
         },
         execute: async (args: any) => {
-            // Emulating Web Search for demo purposes since we don't have a Google Search API Key configured yet.
-            // In a real production version, this would call Google Custom Search API or SerpApi.
-            console.log(`[WebSearch] Searching for: ${args.query}`);
-            return `🔍 [模擬搜尋結果] 關於 "${args.query}" 的資訊：\n\n1. 相關新聞 A...\n2. 相關數據 B...\n\n(此為模擬回應，請在 .env 設定 SERP_API_KEY 以啟用真實搜尋)`;
+            // Check for API Key
+            const apiKey = process.env.SERP_API_KEY;
+            if (!apiKey) {
+                return "⚠️ 請先在 .env 設定 SERP_API_KEY 才能啟用真實搜尋。\n(目前僅回傳模擬結果)";
+            }
+
+            try {
+                console.log(`[WebSearch] Searching SerpApi for: ${args.query}`);
+
+                // Dynamic import for fetch if needed (Node 18+ has native fetch)
+                const url = `https://serpapi.com/search.json?q=${encodeURIComponent(args.query)}&api_key=${apiKey}&engine=google&gl=tw&hl=zh-tw`;
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.error) {
+                    return `❌ Search API Error: ${data.error}`;
+                }
+
+                // Parse Organic Results
+                const results = data.organic_results?.slice(0, 3).map((r: any, i: number) => {
+                    return `${i + 1}. [${r.title}](${r.link})\n   ${r.snippet}`;
+                }).join('\n\n') || "沒有找到相關結果。";
+
+                return `🔍 搜尋結果 (${args.query})：\n\n${results}`;
+
+            } catch (error: any) {
+                console.error("SerpApi Error:", error);
+                return `❌ 網路搜尋失敗: ${error.message}`;
+            }
         }
     },
     'write_note': {
